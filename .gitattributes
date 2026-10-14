@@ -1,0 +1,27 @@
+# 统一换行符：仓库里一律 LF，避免 Windows 贡献者提交 CRLF 造成整文件 diff
+* text=auto eol=lf
+
+# 二进制（保持原样，不要做换行转换）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# 明确标记语言，便于 GitHub 高亮与统计
+*.ts text
+*.tsx text
+*.mjs text
+*.js text
+*.json text
+*.yml text
+*.yaml text
+*.md text
+
+# lib/ 是生成产物（但有意入库存档）：在 GitHub 语言统计里标为 generated，
+# 不淹没源码。故意不排除 diff——产物与源码的对应关系要能审。
+lib/** linguist-generated=true
+pnpm-lock.yaml linguist-generated=true

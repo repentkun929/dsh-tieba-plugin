@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+
+# 构建辅助产物（lib/ 是有意提交的，见下）
+*.tsbuildinfo
+.tmp/
+dist/
+
+# 本地私有数据 —— 绝不要提交
+# 插件本身不存凭据，但本地调试脚本可能落到这里
+.dsh-local/
+*.local
+.env
+.env.*
+!.env.example
+
+# 凭据 / 令牌（BDUSS、STOKEN 等一律不入库）
+bduss*.txt
+cookies*.txt
+!cookies.example.txt
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 注意：lib/ 故意提交进仓库。
+# dsh 从 git 安装插件时只认仓库根目录的 package.json 与 main/exports 指向的文件，
+# 用户机器上不会跑构建（也不该为了装个插件去装 tsdown/typescript/@types/*）。
+# 所以 lib/index.mjs、lib/index.d.mts、lib/client.js 必须随源码一起入库存档；
+# 改完源码请跑 `npx tsdown` 重新打包并一起提交。
