@@ -12,9 +12,17 @@
 | 工具 | 用途 | 关键参数 |
 | --- | --- | --- |
 | `tieba_forum_threads` | 吧内帖子列表 | `forum`（吧名，不带「吧」字，如「原神」）、`page`（默认 1）、`sort`=`default`/`new` |
-| `tieba_thread_detail` | 帖子楼层 | `tid`（支持 `https://tieba.baidu.com/p/<tid>` 或纯数字） |
+| `tieba_thread_detail` | 帖子楼层（**可翻页**） | `tid`（支持 `https://tieba.baidu.com/p/<tid>` 或纯数字）、`page`（默认 1，每页约 15 楼）、`onlyLz`（默认 false，true = 只看楼主） |
 | `tieba_thread_replies` | 楼中楼回复 | `tid`、`pid`（楼层 id，来自 `tieba_thread_detail`） |
-| `tieba_forum_search` | 搜索帖子 | `word`（关键词）、`forum`（可选，留空 = 全站） |
+| `tieba_forum_search` | 搜索帖子（**可翻页**） | `word`（关键词）、`forum`（可选，留空 = 全站）、`page`（默认 1） |
+
+关于 `tieba_thread_detail`：接口每页约 15 楼，长帖必须翻页。返回值里会写清当前页/总页数与「还有下一页，
+传 `page=<n+1>`」，按提示继续调即可。读攻略帖、长帖想知道楼主说了什么时，用 `onlyLz=true` 只看楼主，
+能过滤掉大量无关回复。
+
+关于 `tieba_forum_search`：有些结果命中的是某帖里的**某一层回复**（不是帖子标题），这类结果会带
+`[楼层]` 标记、摘要就是那层楼的内容、链接精确到 `?pid=<楼层 id>`——找「某个具体问题怎么解」时，
+这类命中往往比帖子标题更有用。
 
 ## 配置
 
@@ -93,10 +101,15 @@ sign = md5(参数按 key 的 codepoint 序拼成无分隔符 `k=v` 串 + "tiebac
 
 ### 已知限制（接口本身的行为，非插件缺陷）
 
-- 楼层分页上限：`/c/f/pb/page_pc` 一页 14 楼；超长帖需要翻页，`tieba_thread_detail` 只取首页，
-  单次返回上限由 `maxFloors`（默认 30）控制。
+- 楼层分页：`/c/f/pb/page_pc` 一页 14~15 楼，`tieba_thread_detail` 用 `page` 翻页（实测 `pn=1/2/3`
+  分别返回 1-15 / 16-31 / 32-46 楼）。单次返回上限由 `maxFloors`（默认 30）控制。
+  `lz=1` 是「只看楼主」，与分页正交；只看楼主时每页条数不是 15，所以判断还有没有下一页
+  必须用返回的 `hasMore`，不能用条数推断。
 - 楼中楼不能单独翻页：匿名通道只有楼层内联的那一份（`/c/f/pb/nestedFloor` 要登录）。
-  `tieba_thread_replies` 会按 `pid` 需要的那几页去请求（最多 20 页），再挑出对应楼层。
+  `tieba_thread_replies` 会按 `pid` 需要的那几页去请求（最多 20 页），再挑出对应楼层，
+  并回传该楼层所在的页号与楼层号。
+- 搜索可翻页（`pn` 必须显式传，实测 `pn=1/2/3` 返回完全不同的帖子）；搜索接口**不返回回复数**，
+  所以无法按热度排序。
 - 吧内排序只有 `default`（算法推荐，置顶在前）与 `new`（按发帖时间倒序）。
 - `post_list` 的 `floor` 不连续：缺号是被折叠/删除的楼层（`fold_tip="查看本楼内容"`）。
 - `user_list` 是数组，按 `id` 索引作者名——楼层本身只有 `author_id`，需要联表取名。
@@ -109,7 +122,7 @@ pnpm install --config.strict-peer-dependencies=false
 python scripts/link_deps.py      # 可选：把宿主的 @deepseek-ai/* junction 进来做同版本校验
 npx tsdown                       # 双端打包
 npm run typecheck                # 双 tsconfig 类型检查
-npm test                         # 52 项测试（需 Node >= 22）
+npm test                         # 60 项测试（需 Node >= 22）
 ```
 
 一次跑完：`powershell -ExecutionPolicy Bypass -File scripts/build.ps1`。
@@ -135,8 +148,8 @@ npm test                         # 52 项测试（需 Node >= 22）
 
 | 文件 | 覆盖 |
 | --- | --- |
-| `test/contract.test.mjs` | 40 项：sign 算法、四端点解析、错误码归一化、`tiebaMetaFrom` 字段校验、proxyUrl 接线、**插件装载契约（真 cordis + 无 config）** |
-| `test/client-render.test.mjs` | 12 项：**浏览器端产物离线渲染**——按宿主路径执行 `lib/client.js`、捕获 keyed 注册、把真实 `presentationMeta` 喂给组件后用 `react-dom/server` 渲染成 HTML |
+| `test/contract.test.mjs` | 46 项：sign 算法、四端点解析、错误码归一化、`tiebaMetaFrom` 字段校验、proxyUrl 接线、**楼层/搜索翻页与楼层级命中**、**插件装载契约（真 cordis + 无 config）** |
+| `test/client-render.test.mjs` | 17 项：**浏览器端产物离线渲染**——按宿主路径执行 `lib/client.js`、捕获 keyed 注册、把真实 `presentationMeta` 喂给组件后用 `react-dom/server` 渲染成 HTML |
 
 渲染测试默认测源目录产物；加 `TIEBA_CLIENT_ARTIFACT=<profile 里的 client.js>` 可直接验证**已安装**的那一份。
 
@@ -209,7 +222,7 @@ desktop profile 没有 hmr bundle，因此**新装或更新后需要重启 dsh �
 │   ├── tool.ts             # 四个工具的 defineTool 定义
 │   ├── skill.ts            # tieba-briefing 技能提供者
 │   └── client/index.tsx    # 浏览器端 keyed Toolview
-├── test/                   # 52 项测试（契约 40 + 浏览器端渲染 12）
+├── test/                   # 63 项测试（契约 46 + 浏览器端渲染 17）
 ├── scripts/                # 构建 / 依赖链接 / profile 同步
 ├── lib/                    # 构建产物（**已提交**，见 .gitignore 说明）
 ├── cordis.patch.yml        # bundle 挂载补丁

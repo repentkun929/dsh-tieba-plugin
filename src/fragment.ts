@@ -41,13 +41,28 @@ export interface SearchItem {
   author: string
   url: string
   abstract: string
+  /** 楼层级命中时是该楼层的 post id，可用于 ?pid= 精确直达；否则为空串。 */
+  pid: string
+  /** true = 这条命中的是某帖里的一层楼（不是帖子标题本身）。 */
+  isFloor: boolean
 }
 
 export type TiebaMeta =
   | { kind: 'tieba-threads'; forum: string; sort: string; items: ThreadItem[] }
-  | { kind: 'tieba-floors'; tid: string; title: string; forum: string; floors: FloorItem[]; totalFloor: number }
-  | { kind: 'tieba-replies'; tid: string; items: ReplyItem[] }
-  | { kind: 'tieba-search'; word: string; forum: string; items: SearchItem[] }
+  | {
+      kind: 'tieba-floors'
+      tid: string
+      title: string
+      forum: string
+      floors: FloorItem[]
+      totalFloor: number
+      page: number
+      totalPage: number
+      hasMore: boolean
+      onlyLz: boolean
+    }
+  | { kind: 'tieba-replies'; tid: string; items: ReplyItem[]; floor: number; page: number; subTotal: number }
+  | { kind: 'tieba-search'; word: string; forum: string; items: SearchItem[]; page: number; hasMore: boolean }
 
 /** 每种 kind 承载列表的字段名（floors 用 `floors`，其余用 `items`）——必须与 tool.ts 的 presentationMeta 一致。 */
 const META_LIST_FIELD: Record<TiebaMeta['kind'], 'items' | 'floors'> = {

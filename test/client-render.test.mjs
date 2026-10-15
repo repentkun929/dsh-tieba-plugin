@@ -198,32 +198,109 @@ test('tieba_thread_detail 的真实 meta（floors 字段）渲染出楼层', () 
   assert.match(html, /作者甲/)
 })
 
+test('tieba_thread_detail 的翻页状态渲染「还有第 N 页」', () => {
+  const base = { title: '题目', forum: '原神', totalFloor: 219, totalPage: 15, page: 1, hasMore: true, onlyLz: false }
+  const items = [
+    { floor: 1, author: '作者甲', content: '正文甲', imageCount: 0, replyNum: 0, time: '2026-01-01 10:00', pid: '9001', ...base },
+    { floor: 2, author: '作者乙', content: '正文乙', imageCount: 0, replyNum: 0, time: '2026-01-01 10:05', pid: '9002', ...base },
+  ]
+  const html = renderFor('tieba_thread_detail', finishedBlock('tieba_thread_detail', { tid: '11084319647', page: 1 }, { text: 'x', items }))
+  assert.doesNotMatch(html, /贴吧结果不可用/)
+  assert.match(html, /第 1\/15 页/)
+  assert.match(html, /全帖约 219 楼/)
+  assert.match(html, /还有第 2 页可读/)
+})
+
+test('tieba_thread_detail 只看楼主时渲染「只看楼主」且不显示总楼数', () => {
+  const base = { title: '攻略帖', forum: '鸣潮', totalFloor: 219, totalPage: 8, page: 2, hasMore: true, onlyLz: true }
+  const items = [
+    { floor: 1, author: '楼主', content: '正文甲', imageCount: 0, replyNum: 0, time: '2026-01-01 10:00', pid: '9001', ...base },
+  ]
+  const html = renderFor('tieba_thread_detail', finishedBlock('tieba_thread_detail', { tid: '11084319647', page: 2, onlyLz: true }, { text: 'x', items }))
+  assert.match(html, /只看楼主/)
+  assert.match(html, /第 2 页/)
+  // 只看楼主时 totalFloor 是「全帖回复数」，跟当前页条数没有可比性，不该显示
+  assert.doesNotMatch(html, /全帖约/)
+})
+
+test('tieba_thread_detail 已到最后一页时渲染「已到最后一页」', () => {
+  const base = { title: '题目', forum: '原神', totalFloor: 58, totalPage: 1, page: 1, hasMore: false, onlyLz: false }
+  const items = [
+    { floor: 1, author: '作者甲', content: '正文甲', imageCount: 0, replyNum: 0, time: '2026-01-01 10:00', pid: '9001', ...base },
+  ]
+  const html = renderFor('tieba_thread_detail', finishedBlock('tieba_thread_detail', { tid: '11102322434' }, { text: 'x', items }))
+  assert.match(html, /已到最后一页/)
+  assert.doesNotMatch(html, /还有第/)
+})
+
 test('tieba_thread_replies 的真实 meta 渲染出楼中楼', () => {
   const value = {
     text: '楼中楼 2 条：',
     items: [
-      { pid: '1', author: '甲', content: '回复一', time: '2026-01-01 10:00' },
-      { pid: '2', author: '乙', content: '回复二', time: '2026-01-01 10:01' },
+      { pid: '1', author: '甲', content: '回复一', time: '2026-01-01 10:00', floor: 5, page: 1, subTotal: 2 },
+      { pid: '2', author: '乙', content: '回复二', time: '2026-01-01 10:01', floor: 5, page: 1, subTotal: 2 },
     ],
   }
   const html = renderFor('tieba_thread_replies', finishedBlock('tieba_thread_replies', { tid: '11096100313', pid: '154021327232' }, value))
   assert.doesNotMatch(html, /贴吧结果不可用/)
   assert.match(html, /回复一/)
   assert.match(html, /回复二/)
+  // floor>0 时卡片要标出「第 N 楼」，让播报的定位与卡片一致
+  assert.match(html, /第 5 楼/)
+})
+
+test('tieba_thread_replies 的 meta 缺 floor 时不渲染楼层定位', () => {
+  const value = {
+    text: '楼中楼 1 条：',
+    items: [{ pid: '1', author: '甲', content: '回复一', time: '2026-01-01 10:00' }],
+  }
+  const html = renderFor('tieba_thread_replies', finishedBlock('tieba_thread_replies', { tid: '1', pid: '1' }, value))
+  assert.doesNotMatch(html, /贴吧结果不可用/)
+  assert.doesNotMatch(html, /第 \d+ 楼/)
+  assert.match(html, /回复一/)
 })
 
 test('tieba_forum_search 的真实 meta 渲染出跨吧结果', () => {
   const value = {
     text: '贴吧搜索「米提亚强度」前 2 条：',
     items: [
-      { tid: '333', title: '结果一', author: '甲', forumName: '原神', replyNum: 5, url: 'https://tieba.baidu.com/p/333', abstract: '摘要一' },
-      { tid: '444', title: '结果二', author: '乙', forumName: '原神新料', replyNum: 1, url: 'https://tieba.baidu.com/p/444', abstract: '' },
+      { tid: '333', title: '结果一', author: '甲', forumName: '原神', replyNum: 5, url: 'https://tieba.baidu.com/p/333', abstract: '摘要一', pid: '', isFloor: false, page: 1, hasMore: true },
+      { tid: '444', title: '结果二', author: '乙', forumName: '原神新料', replyNum: 1, url: 'https://tieba.baidu.com/p/444', abstract: '', pid: '', isFloor: false, page: 1, hasMore: true },
     ],
   }
   const html = renderFor('tieba_forum_search', finishedBlock('tieba_forum_search', { word: '米提亚强度' }, value))
   assert.doesNotMatch(html, /贴吧结果不可用/)
   assert.match(html, /结果一/)
   assert.match(html, /原神新料/)
+  assert.match(html, /第 1 页/)
+  assert.match(html, /还有第 2 页可读/)
+})
+
+test('tieba_forum_search 的楼层级命中渲染 [楼层] 标记与 ?pid= 直达链接', () => {
+  const value = {
+    text: '贴吧搜索「电磁」第 1 页，1 条：',
+    items: [
+      {
+        tid: '777',
+        title: '心月狐强度认真的吗？',
+        author: '甲',
+        forumName: '鸣潮',
+        url: 'https://tieba.baidu.com/p/777?pid=154013095236',
+        abstract: '电磁比同奏高',
+        pid: '154013095236',
+        isFloor: true,
+        page: 1,
+        hasMore: false,
+      },
+    ],
+  }
+  const html = renderFor('tieba_forum_search', finishedBlock('tieba_forum_search', { word: '电磁', forum: '鸣潮' }, value))
+  assert.doesNotMatch(html, /贴吧结果不可用/)
+  // 楼层级命中必须带 ?pid=，否则用户得自己在几百楼里翻
+  assert.match(html, /href="https:\/\/tieba\.baidu\.com\/p\/777\?pid=154013095236"/)
+  assert.match(html, /\[楼层\]/)
+  assert.match(html, /已到最后一页/)
+  assert.doesNotMatch(html, /还有第 2 页/)
 })
 
 test('业务失败（items 空）渲染空列表而不崩', () => {

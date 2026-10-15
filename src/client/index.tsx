@@ -49,7 +49,12 @@ function FloorsView({ meta }: { meta: Extract<TiebaMeta, { kind: 'tieba-floors' 
   return (
     <div style={{ padding: 12, fontSize: 13 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        {meta.title || meta.tid} · 前 {meta.floors.length} 楼
+        {meta.title || meta.tid}
+        {meta.onlyLz ? ' · 只看楼主' : ''}
+        {' · '}
+        {meta.onlyLz
+          ? `第 ${meta.page} 页 · ${meta.floors.length} 楼`
+          : `第 ${meta.page}/${meta.totalPage} 页 · ${meta.floors.length} 楼（全帖约 ${meta.totalFloor} 楼）`}
       </div>
       {meta.floors.map((f) => (
         <div key={f.pid || f.floor} style={rowStyle}>
@@ -57,15 +62,23 @@ function FloorsView({ meta }: { meta: Extract<TiebaMeta, { kind: 'tieba-floors' 
           <div style={{ opacity: 0.9 }}>{f.content.slice(0, 120)}</div>
         </div>
       ))}
+      {meta.hasMore
+        ? (
+          <div style={{ marginTop: 8, opacity: 0.6 }}>
+            还有第 {meta.page + 1} 页可读
+          </div>
+        )
+        : <div style={{ marginTop: 8, opacity: 0.5 }}>已到最后一页</div>}
     </div>
   )
 }
 
 function RepliesView({ meta }: { meta: Extract<TiebaMeta, { kind: 'tieba-replies' }> }) {
+  const where = meta.floor > 0 ? ` · 第 ${meta.floor} 楼` : ''
   return (
     <div style={{ padding: 12, fontSize: 13 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        楼中楼回复 · 前 {meta.items.length} 条
+        楼中楼回复{where} · 前 {meta.items.length} 条
       </div>
       {meta.items.map((r, i) => (
         <div key={i} style={rowStyle}>
@@ -80,17 +93,21 @@ function SearchView({ meta }: { meta: Extract<TiebaMeta, { kind: 'tieba-search' 
   return (
     <div style={{ padding: 12, fontSize: 13 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        搜索「{meta.word}」{meta.forum ? `（${meta.forum}吧）` : ''} · {meta.items.length} 条
+        搜索「{meta.word}」{meta.forum ? `（${meta.forum}吧）` : ''} · 第 {meta.page} 页 · {meta.items.length} 条
       </div>
       {meta.items.map((t) => (
-        <div key={t.tid} style={rowStyle}>
+        <div key={`${t.tid}-${t.pid}`} style={rowStyle}>
           <a href={t.url} target="_blank" rel="noreferrer">{t.title}</a>
+          {t.isFloor ? <span style={{ opacity: 0.7 }}> [楼层]</span> : null}
           <div style={{ opacity: 0.7 }}>[{t.forumName}] · {t.author}</div>
           {t.abstract
             ? <div style={{ opacity: 0.55, marginTop: 2 }}>{t.abstract.slice(0, 100)}</div>
             : null}
         </div>
       ))}
+      {meta.hasMore
+        ? <div style={{ marginTop: 8, opacity: 0.6 }}>还有第 {meta.page + 1} 页可读</div>
+        : <div style={{ marginTop: 8, opacity: 0.5 }}>已到最后一页</div>}
     </div>
   )
 }

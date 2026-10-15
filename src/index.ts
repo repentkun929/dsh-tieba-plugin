@@ -27,9 +27,11 @@ const PROMPT = `## Query tieba (tieba)
 用户询问贴吧内容时，使用贴吧工具族（读公开数据，匿名即可，不需要登录）：
 - \`tieba_forum_threads\`：某个吧的帖子列表（forum 不带「吧」字，如「原神」）。
 - \`tieba_thread_detail\`：一个帖子的楼层；用户给的是 \`https://tieba.baidu.com/p/<tid>\` 链接时，
-  直接把链接填进 tid 参数。
+  直接把链接填进 tid 参数。每页约 15 楼，长帖要传 page 翻页；想知道楼主说了什么时传
+  onlyLz=true 只看楼主。
 - \`tieba_thread_replies\`：楼层下的楼中楼回复，需要 tid + pid（pid 来自 tieba_thread_detail）。
-- \`tieba_forum_search\`：按关键词搜帖子，可用 forum 限定吧。
+- \`tieba_forum_search\`：按关键词搜帖子，可用 forum 限定吧；可用 page 翻页，标了「楼层」的结果
+  是某帖里的某一层回复，链接精确到那一楼。
 拿到数据后按 tieba-briefing 技能规范播报。接口每页固定条数、楼层/楼中楼有上限，
 汇报时如实说明只取到前 N 楼。`
 

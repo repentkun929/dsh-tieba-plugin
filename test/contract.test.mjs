@@ -6,13 +6,25 @@ import { contentToText, contentImageCount, formatTime, tiebaMetaFrom } from '../
 import { calcSign, findJsonAfter, makeApiClient, md5Hex } from '../src/api.ts'
 import { tiebaTools } from '../src/tool.ts'
 
-/** 构造一个按 URL 匹配返回固定 JSON 的假 fetch。 */
+/** 构造一个按 URL 匹配返回固定 JSON 的假 fetch。
+ *  同一条 URL 被多次请求时（例如翻页：/c/f/pb/page_pc 会按 pn 反复请求），
+ *  按「第几次命中该 needle」依次返回 routes 里同 needle 的连续条目，取完就复用最后一条。
+ *  这样测试可以表达「第 1 页返回 A、第 2 页返回 B」，否则 pn 永远拿到同一个响应。 */
 function fakeFetch(routes) {
   const calls = []
+  const groups = new Map()
+  for (const [needle, body] of routes) {
+    if (!groups.has(needle)) groups.set(needle, [])
+    groups.get(needle).push(body)
+  }
+  const hits = new Map()
   const impl = async (url) => {
     calls.push(String(url))
-    for (const [needle, body] of routes) {
-      if (String(url).includes(needle)) return new Response(body)
+    for (const [needle, bodies] of groups) {
+      if (!String(url).includes(needle)) continue
+      const n = hits.get(needle) ?? 0
+      hits.set(needle, n + 1)
+      return new Response(bodies[Math.min(n, bodies.length - 1)])
     }
     return new Response(JSON.stringify({ error_code: 404, error_msg: 'not found' }))
   }
@@ -284,14 +296,16 @@ describe('api 层', () => {
       userAgent: 'UA', timeoutMs: 5000,
       fetchImpl: fakeFetch([['/c/f/pb/page_pc', json]]),
     })
-    const items = await api.threadReplies('111', '9002', 10)
-    assert.equal(items.length, 2)
-    assert.equal(items[0].author, 'bdfftw')
-    assert.equal(items[0].content, '确实如此')
-    assert.equal(items[1].author, '咪啪寒蝉')
+    const res = await api.threadReplies('111', '9002', 10)
+    // threadReplies 现在返回 {items, floor, page, subTotal}，不是裸数组：
+    // floor/page 是扫页时顺带拿到的定位信息，调用方要靠它说清「这层楼在哪」。
+    assert.equal(res.items.length, 2)
+    assert.equal(res.items[0].author, 'bdfftw')
+    assert.equal(res.items[0].content, '确实如此')
+    assert.equal(res.items[1].author, '咪啪寒蝉')
   })
 
-  it('threadReplies 楼层无楼中楼返回空数组', async () => {
+  it('threadReplies 楼层无楼中楼返回空 items', async () => {
     const json = JSON.stringify({
       error_code: 0,
       forum: { name: 'x' },
@@ -305,7 +319,41 @@ describe('api 层', () => {
       userAgent: 'UA', timeoutMs: 5000,
       fetchImpl: fakeFetch([['/c/f/pb/page_pc', json]]),
     })
-    assert.deepEqual(await api.threadReplies('111', '9002', 10), [])
+    const res = await api.threadReplies('111', '9002', 10)
+    assert.deepEqual(res.items, [])
+    assert.equal(res.floor, 2)
+    assert.equal(res.page, 1)
+    assert.equal(res.subTotal, 0)
+  })
+
+  it('threadReplies 命中楼层在第 2 页时如实回传页码与楼层号', async () => {
+    // pid 不在第 1 页 → 必须真的翻页去找，并把命中的页号回传。
+    const page1 = JSON.stringify({
+      error_code: 0,
+      thread: { reply_num: 30 },
+      page: { total_page: 2 },
+      user_list: [{ id: '1', name: 'u1' }],
+      post_list: [{ floor: 2, id: '111', time: 1, author_id: 1, content: [] }],
+    })
+    const page2 = JSON.stringify({
+      error_code: 0,
+      thread: { reply_num: 30 },
+      page: { total_page: 2 },
+      user_list: [{ id: '1', name: 'u1' }],
+      post_list: [{ floor: 16, id: '222', time: 1, author_id: 1, sub_post_number: 5, sub_post_list: { total_num: 5, sub_post_list: [
+        { id: 's1', author_id: 1, content: 'A' },
+        { id: 's2', author_id: 1, content: 'B' },
+      ] } }],
+    })
+    const api = makeApiClient({
+      userAgent: 'UA', timeoutMs: 5000,
+      fetchImpl: fakeFetch([['/c/f/pb/page_pc', page1], ['/c/f/pb/page_pc', page2]]),
+    })
+    const res = await api.threadReplies('111', '222', 10)
+    assert.equal(res.items.length, 2)
+    assert.equal(res.floor, 16)
+    assert.equal(res.page, 2)
+    assert.equal(res.subTotal, 5)
   })
 
   it('search 解析 searchpost 的 post_list', async () => {
@@ -319,13 +367,18 @@ describe('api 层', () => {
     })
     const fetchImpl = fakeFetch([['/c/s/searchpost', json]])
     const api = makeApiClient({ userAgent: 'UA', timeoutMs: 5000, fetchImpl })
-    const items = await api.search('抽卡', '', 20)
-    assert.equal(items.length, 2)
-    assert.equal(items[0].forumName, '原神')
-    assert.equal(items[0].author, 'u1')
-    assert.equal(items[0].abstract, '摘要一')
-    assert.equal(items[0].url, 'https://tieba.baidu.com/p/1')
-    assert.equal(items[1].author, 'u2')
+    const res = await api.search('抽卡', '', 20, 1)
+    // search 返回 {items, totalPage, hasMore}，不是裸数组——翻页信息必须透出给调用方。
+    assert.equal(res.items.length, 2)
+    assert.equal(res.items[0].forumName, '原神')
+    assert.equal(res.items[0].author, 'u1')
+    assert.equal(res.items[0].abstract, '摘要一')
+    assert.equal(res.items[0].url, 'https://tieba.baidu.com/p/1')
+    assert.equal(res.items[1].author, 'u2')
+    assert.equal(res.totalPage, 128626)
+    assert.equal(res.hasMore, true)
+    assert.equal(res.items[0].isFloor, false)
+    assert.equal(res.items[0].pid, '')
     // 不带 forum 时不应有 kw 参数
     assert.ok(!fetchImpl.calls[0].includes('kw='))
   })
@@ -334,9 +387,43 @@ describe('api 层', () => {
     const json = JSON.stringify({ error_code: 0, post_list: [] })
     const fetchImpl = fakeFetch([['/c/s/searchpost', json]])
     const api = makeApiClient({ userAgent: 'UA', timeoutMs: 5000, fetchImpl })
-    const items = await api.search('强度', '原神', 20)
-    assert.equal(items.length, 0)
+    const res = await api.search('强度', '原神', 20, 1)
+    assert.equal(res.items.length, 0)
     assert.ok(fetchImpl.calls[0].includes('kw='))
+  })
+
+  it('search 把 page 透传到 pn（翻页）', async () => {
+    const json = JSON.stringify({ error_code: 0, post_list: [], page: { current_page: 3, total_page: 9, has_more: 0 } })
+    const fetchImpl = fakeFetch([['/c/s/searchpost', json]])
+    const api = makeApiClient({ userAgent: 'UA', timeoutMs: 5000, fetchImpl })
+    const res = await api.search('心月狐', '鸣潮', 10, 3)
+    assert.ok(fetchImpl.calls[0].includes('pn=3'), `pn 没被透传：${fetchImpl.calls[0]}`)
+    assert.equal(res.hasMore, false)
+  })
+
+  // is_floor=1 表示命中的是「某帖里的某一层楼」而不是帖子标题。
+  // 这类结果要带 ?pid= 精确直达链接，否则用户得自己在几百楼里翻。
+  it('search 楼层级命中（is_floor=1）产出精确到楼层的链接', async () => {
+    const json = JSON.stringify({
+      error_code: 0,
+      post_list: [
+        { tid: '777', pid: '154013095236', is_floor: 1, title: '心月狐强度认真的吗？', fname: '鸣潮', author: { name: 'u1' }, content: '<p>电磁比同奏高</p>' },
+        { tid: '888', is_floor: 0, title: '普通标题命中', fname: '鸣潮', author: { name: 'u2' }, content: '摘要' },
+      ],
+      page: { current_page: 1, total_page: 1, has_more: 0 },
+    })
+    const api = makeApiClient({ userAgent: 'UA', timeoutMs: 5000, fetchImpl: fakeFetch([['/c/s/searchpost', json]]) })
+    const res = await api.search('电磁', '鸣潮', 10, 1)
+    const floorHit = res.items[0]
+    assert.equal(floorHit.isFloor, true)
+    assert.equal(floorHit.pid, '154013095236')
+    assert.equal(floorHit.url, 'https://tieba.baidu.com/p/777?pid=154013095236')
+    // 摘要要剥掉 HTML 标签并压平空白
+    assert.equal(floorHit.abstract, '电磁比同奏高')
+    const titleHit = res.items[1]
+    assert.equal(titleHit.isFloor, false)
+    assert.equal(titleHit.pid, '')
+    assert.equal(titleHit.url, 'https://tieba.baidu.com/p/888')
   })
 
   it('未配置 BDUSS 时不带 Cookie 头', async () => {

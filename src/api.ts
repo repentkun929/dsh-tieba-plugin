@@ -129,18 +129,36 @@ export interface TiebaApi {
     forumName: string
     items: ThreadItem[]
   }>
-  /** 帖子楼层（/c/f/pb/page_pc，匿名，14 楼/页，可翻页）。 */
-  threadFloors(tid: string, limit: number): Promise<{
+  /** 帖子楼层（/c/f/pb/page_pc，匿名，14~15 楼/页，可翻页；lz=1 只看楼主）。
+   *  注意：`rn` 参数实测无效，每页条数由服务端决定；只看楼主时每页条数也不是 15，
+   *  因此判断「还有没有下一页」必须用返回的 `hasMore`，不能用条数推断。 */
+  threadFloors(tid: string, limit: number, page?: number, onlyLz?: boolean): Promise<{
     forum: string
     title: string
     floors: FloorItem[]
     totalFloor: number
     totalPage: number
+    currentPage: number
+    hasMore: boolean
+    onlyLz: boolean
   }>
-  /** 楼中楼（楼层内联 sub_post_list；匿名可用）。 */
-  threadReplies(tid: string, pid: string, limit: number): Promise<ReplyItem[]>
-  /** 搜索（/c/s/searchpost，匿名；不带 kw 时全站，带 kw 时吧内）。 */
-  search(word: string, forum: string, limit: number): Promise<SearchItem[]>
+  /** 楼中楼（楼层内联 sub_post_list；匿名可用）。
+   *  返回楼层定位（floor/page/subTotal）：调用方据此在播报里说明「第 N 楼（第 M 页）下的 X 条」。 */
+  threadReplies(tid: string, pid: string, limit: number): Promise<{
+    items: ReplyItem[]
+    /** 命中楼层在帖内的楼层号；没找到时为 0。 */
+    floor: number
+    /** 命中楼层所在的翻页页码；没找到时为 0。 */
+    page: number
+    /** 该楼层楼中楼的总条数（可能多于已返回的条数）。 */
+    subTotal: number
+  }>
+  /** 搜索（/c/s/searchpost，匿名；不带 kw 时全站，带 kw 时吧内）。可翻页。 */
+  search(word: string, forum: string, limit: number, page?: number): Promise<{
+    items: SearchItem[]
+    totalPage: number
+    hasMore: boolean
+  }>
 }
 
 /** 从 HTML 里按 marker 提取内嵌 JSON（marker 后跳过空白/冒号再做括号配平）。 */
@@ -374,11 +392,16 @@ export function makeApiClient(opts: {
       return { forumName: forum, items: items.slice(0, Math.max(1, limit)) }
     },
 
-    async threadFloors(tid, limit) {
-      const d = (await signedGet('/c/f/pb/page_pc', { kz: tid, pn: '1' })) as Record<string, unknown>
+    async threadFloors(tid, limit, page, onlyLz) {
+      // pn 必须显式传：实测 pn=1/2/3 分别返回 2-15 / 16-31 / 32-46 楼，可正常翻页。
+      // lz=1 是「只看楼主」（实测 author_id 恒等于 thread.author.id，且与分页正交）；
+      // 只看楼主时每页条数不再是 15，所以 hasMore 只能取 page.has_more。
+      const params: Record<string, string | number> = { kz: tid, pn: Math.max(1, page ?? 1) }
+      if (onlyLz) params.lz = '1'
+      const d = (await signedGet('/c/f/pb/page_pc', params)) as Record<string, unknown>
       const thread = (d.thread ?? {}) as Record<string, unknown>
       const forum = (d.forum ?? d.display_forum ?? {}) as Record<string, unknown>
-      const page = (d.page ?? {}) as Record<string, unknown>
+      const pageInfo = (d.page ?? {}) as Record<string, unknown>
       // 主楼在 first_floor（对象），楼层在 post_list（数组）
       const floors: FloorItem[] = []
       const first = d.first_floor
@@ -391,12 +414,21 @@ export function makeApiClient(opts: {
       }
       floors.sort((a, b) => a.floor - b.floor)
       const capped = floors.slice(0, Math.max(1, limit))
+      const totalPage = num(pageInfo.total_page, 1)
+      const currentPage = num(pageInfo.current_page, Math.max(1, page ?? 1))
+      // has_more 有 0/1 两种取值；缺失时退回用「当前页 < 总页数」推断。
+      const hasMore = typeof pageInfo.has_more === 'number'
+        ? pageInfo.has_more === 1
+        : currentPage < totalPage
       return {
         forum: str(forum.name),
         title: str(thread.title),
         floors: capped,
         totalFloor: num(thread.reply_num),
-        totalPage: num(page.total_page, 1),
+        totalPage,
+        currentPage,
+        hasMore,
+        onlyLz: Boolean(onlyLz),
       }
     },
 
@@ -417,7 +449,8 @@ export function makeApiClient(opts: {
           const o = p as Record<string, unknown>
           if (str(o.id) !== wanted) continue
           const sub = (o.sub_post_list ?? {}) as Record<string, unknown>
-          for (const s of Array.isArray(sub.sub_post_list) ? sub.sub_post_list : []) {
+          const all = Array.isArray(sub.sub_post_list) ? sub.sub_post_list : []
+          for (const s of all) {
             if (!s || typeof s !== 'object') continue
             const so = s as Record<string, unknown>
             const aid = str(so.author_id)
@@ -427,16 +460,28 @@ export function makeApiClient(opts: {
               time: num(so.time),
             })
           }
-          return out.slice(0, cap)
+          // 把「这层楼在哪一页、是第几楼、楼中楼总共几条」一并回给调用方：
+          // 只回回复列表的话，调用方无法在播报里说明定位，也没法判断是不是漏了。
+          return {
+            items: out.slice(0, cap),
+            floor: num(o.floor),
+            page: pn,
+            subTotal: num(sub.total_num, all.length),
+          }
         }
         const page = (d.page ?? {}) as Record<string, unknown>
         if (num(page.total_page, 1) <= pn) break
       }
-      return out
+      return { items: out, floor: 0, page: 0, subTotal: 0 }
     },
 
-    async search(word, forum, limit) {
-      const params: Record<string, string | number> = { word, pn: '1', rn: Math.max(1, limit) }
+    async search(word, forum, limit, page) {
+      // pn 必须显式传：实测 pn=1/2/3 返回完全不同的帖子，可正常翻页。
+      const params: Record<string, string | number> = {
+        word,
+        pn: Math.max(1, page ?? 1),
+        rn: Math.max(1, limit),
+      }
       if (forum) params.kw = forum
       const d = (await signedGet('/c/s/searchpost', params)) as Record<string, unknown>
       const list = Array.isArray(d.post_list) ? d.post_list : []
@@ -446,16 +491,29 @@ export function makeApiClient(opts: {
         const o = p as Record<string, unknown>
         const tid = str(o.tid ?? o.id)
         if (!tid) continue
+        // is_floor=1 表示这条命中的是「某帖里的一个楼层」而不是帖子标题本身。
+        // 此时 pid 就是该楼层的 post id（实测与 /c/f/pb/page_pc 里的楼层 id 一致），
+        // 用它能把链接精确指到那一楼，而不是让用户自己在一百多楼里翻。
+        const isFloor = num(o.is_floor) === 1
+        const pid = str(o.pid)
         items.push({
           tid,
           title: str(o.title),
           forumName: str(o.fname),
           author: nameOfAuthor(o.author),
-          url: `https://tieba.baidu.com/p/${tid}`,
-          abstract: str(o.content).slice(0, 120),
+          url: isFloor && pid ? `https://tieba.baidu.com/p/${tid}?pid=${pid}` : `https://tieba.baidu.com/p/${tid}`,
+          abstract: str(o.content).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120),
+          pid,
+          isFloor,
         })
       }
-      return items.slice(0, Math.max(1, limit))
+      const pageInfo = (d.page ?? {}) as Record<string, unknown>
+      const totalPage = num(pageInfo.total_page, 1)
+      const currentPage = num(pageInfo.current_page, Math.max(1, page ?? 1))
+      const hasMore = typeof pageInfo.has_more === 'number'
+        ? pageInfo.has_more === 1
+        : currentPage < totalPage
+      return { items: items.slice(0, Math.max(1, limit)), totalPage, hasMore }
     },
   }
 }
